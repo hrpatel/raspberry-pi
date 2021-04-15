@@ -2460,11 +2460,11 @@ spec:
   type: LoadBalancer
   ports:
   - name: http
-    port: 80
+    port: 8080
     protocol: TCP
     targetPort: 8080
   - name: https
-    port: 443
+    port: 8443
     protocol: TCP
     targetPort: 8080
   selector:
@@ -2599,6 +2599,7 @@ spec:
         - containerPort: 6379
       securityContext:
         runAsNonRoot: true
+        runAsUser: 999
       serviceAccountName: argocd-redis
 ---
 apiVersion: apps/v1
