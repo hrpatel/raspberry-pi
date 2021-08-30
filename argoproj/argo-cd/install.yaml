@@ -1,5 +1,4 @@
 ---
-# Source: portainer/templates/namespace.yaml
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -2122,6 +2121,24 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   labels:
+    app.kubernetes.io/component: redis
+    app.kubernetes.io/name: argocd-redis
+    app.kubernetes.io/part-of: argocd
+  name: argocd-redis
+rules:
+- apiGroups:
+  - security.openshift.io
+  resourceNames:
+  - nonroot
+  resources:
+  - securitycontextconstraints
+  verbs:
+  - use
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
     app.kubernetes.io/component: server
     app.kubernetes.io/name: argocd-server
     app.kubernetes.io/part-of: argocd
@@ -2460,7 +2477,7 @@ spec:
   type: LoadBalancer
   ports:
   - name: http
-    port: 8080
+    port: 10080
     protocol: TCP
     targetPort: 8080
   - name: https
@@ -2524,35 +2541,25 @@ spec:
         - containerPort: 5556
         - containerPort: 5557
         - containerPort: 5558
-        securityContext:
-          allowPrivilegeEscalation: false
-          readOnlyRootFilesystem: true
-          runAsNonRoot: true
         volumeMounts:
         - mountPath: /shared
           name: static-files
-        - mountPath: /tmp
-          name: dexconfig
       initContainers:
       - command:
         - cp
         - -n
         - /usr/local/bin/argocd
         - /shared/argocd-dex
-        image: alinbalutoiu/argocd:v2.0.0
+        image: alinbalutoiu/argocd:v2.0.5
         imagePullPolicy: Always
         name: copyutil
         volumeMounts:
         - mountPath: /shared
           name: static-files
-        - mountPath: /tmp
-          name: dexconfig
       serviceAccountName: argocd-dex-server
       volumes:
       - emptyDir: {}
         name: static-files
-      - emptyDir: {}
-        name: dexconfig
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -2592,14 +2599,16 @@ spec:
         - ""
         - --appendonly
         - "no"
-        image: redis:6.2.1-alpine
+        image: redis:6.2.4-alpine
         imagePullPolicy: Always
         name: redis
         ports:
         - containerPort: 6379
       securityContext:
+        fsGroup: 1000
+        runAsGroup: 1000
         runAsNonRoot: true
-        runAsUser: 999
+        runAsUser: 1000
       serviceAccountName: argocd-redis
 ---
 apiVersion: apps/v1
@@ -2641,7 +2650,7 @@ spec:
         - argocd-repo-server
         - --redis
         - argocd-redis:6379
-        image: alinbalutoiu/argocd:v2.0.0
+        image: alinbalutoiu/argocd:v2.0.5
         imagePullPolicy: Always
         livenessProbe:
           failureThreshold: 3
@@ -2737,7 +2746,7 @@ spec:
         - argocd-server
         - --staticassets
         - /shared/app
-        image: alinbalutoiu/argocd:v2.0.0
+        image: alinbalutoiu/argocd:v2.0.5
         imagePullPolicy: Always
         livenessProbe:
           httpGet:
@@ -2830,7 +2839,7 @@ spec:
         - "20"
         - --operation-processors
         - "10"
-        image: alinbalutoiu/argocd:v2.0.0
+        image: alinbalutoiu/argocd:v2.0.5
         imagePullPolicy: Always
         livenessProbe:
           httpGet:
@@ -2868,4 +2877,112 @@ spec:
             path: ca.crt
           optional: true
           secretName: argocd-repo-server-tls
-
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: argocd-application-controller-network-policy
+spec:
+  ingress:
+  - from:
+    - namespaceSelector: {}
+    ports:
+    - port: 8082
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: argocd-application-controller
+  policyTypes:
+  - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: argocd-dex-server-network-policy
+spec:
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: argocd-server
+    ports:
+    - port: 5556
+      protocol: TCP
+    - port: 5557
+      protocol: TCP
+  - from:
+    - namespaceSelector: {}
+    ports:
+    - port: 5558
+      protocol: TCP
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: argocd-dex-server
+  policyTypes:
+  - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: argocd-redis-network-policy
+spec:
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: argocd-server
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: argocd-repo-server
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: argocd-application-controller
+    ports:
+    - port: 6379
+      protocol: TCP
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: argocd-redis
+  policyTypes:
+  - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: argocd-repo-server-network-policy
+spec:
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: argocd-server
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: argocd-application-controller
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: argocd-notifications-controller
+    ports:
+    - port: 8081
+      protocol: TCP
+  - from:
+    - namespaceSelector: {}
+    ports:
+    - port: 8084
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: argocd-repo-server
+  policyTypes:
+  - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: argocd-server-network-policy
+spec:
+  ingress:
+  - {}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: argocd-server
+  policyTypes:
+  - Ingress
